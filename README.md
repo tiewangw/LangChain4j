@@ -6,7 +6,7 @@ LangChain4j官网：https://docs.langchain4j.dev/
 
 LangChain4j 的目标是简化与 Java 应用程序 集成大模型。
 
-![1745225677052](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745225677052.png)
+![1745225677052](images/1745225677052.png)
 
 #### 特性：
 
@@ -14,7 +14,7 @@ LangChain4j 的目标是简化与 Java 应用程序 集成大模型。
 
 **LangChain4j vs SpringAI**
 
-![1745226356130](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745226356130.png)
+![1745226356130](images/1745226356130.png)
 
 
 
@@ -89,7 +89,7 @@ class Langchain4jDemosApplicationTests {
 
 运行代码结果
 
-![1745227973724](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745227973724.png)
+![1745227973724](images/1745227973724.png)
 
 你会发现，  LangChain4j 对于初次接入大模型的开发者来说十分友好，不需要指定模型，不需要指定apikey, 即可对接大模型进行对话，这是怎么做到的呢？
 
