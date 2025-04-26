@@ -107,5 +107,297 @@ public OpenAiChatModel(String baseUrl, String apiKey, String organizationId, Str
 }
 ```
 
+在底层在构造OpenAiChatModel时，会判断传入的ApiKey是否等于"demo"，如果等于会将OpenAi的原始API地址"https://api.openai.com/v1"改为"http://langchain4j.dev/demo/openai/v1"，这个地址是langchain4j专门为我们准备的一个体验地址，实际上这个地址相当于是"https://api.openai.com/v1"的代理，我们请求代理时，代理会去调用真正的OpenAi接口，只不过代理会将自己的ApiKey传过去，从而拿到结果返回给我们。
 
+所以，真正开发时，需要大家设置自己的apiKey或baseUrl，可以这么设置：
+
+```java
+ChatLanguageModel model = OpenAiChatModel.builder()
+	.baseUrl("http://langchain4j.dev/demo/openai/v1")
+	.apiKey("demo")
+	.build();
+```
+
+
+
+#### 接入deepseek
+
+```JAVA
+
+    /**
+     * 测试基本对话——接入deepseek
+     */
+    @Test
+    void test02() {
+        ChatLanguageModel model = OpenAiChatModel
+                .builder()
+                .baseUrl("https://api.deepseek.com")
+                .apiKey(System.getenv("DEEP_SEEK_KEY"))
+                .modelName("deepseek-chat")
+                .build();
+
+        String answer = model.chat("你好，你是谁？");
+
+        System.out.println(answer);
+    }
+```
+
+文生图WanxImageModel
+
+```JAVA
+@Test
+public void test() {
+    WanxImageModel wanxImageModel = WanxImageModel.builder()
+    .modelName("wanx2.1-t2i-plus")
+    .apiKey(System.getenv("ALI_AI_KEY"))
+    .build();
+
+    Response<Image> response = wanxImageModel.generate("美女");
+    System.out.println(response.content().url());
+}	
+```
+
+文生语音
+
+```java
+package com.xs.langchain4j_demos;
+
+import com.alibaba.dashscope.audio.ttsv2.SpeechSynthesisParam;
+import com.alibaba.dashscope.audio.ttsv2.SpeechSynthesizer;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+public class AudioTest {
+    private static String model = "cosyvoice-v1";
+    private static String voice = "longxiaochun";
+
+    public static void streamAuidoDataToSpeaker() {
+        SpeechSynthesisParam param =
+                SpeechSynthesisParam.builder()
+                        // 若没有将API Key配置到环境变量中，需将下面这行代码注释放开，并将your-api-key替换为自己的API Key
+                        .apiKey(System.getenv("ALI_AI_KEY"))
+                        .model(model)
+                        .voice(voice)
+                        .build();
+        SpeechSynthesizer synthesizer = new SpeechSynthesizer(param, null);
+        ByteBuffer audio = synthesizer.call("大家好我是徐庶？");
+        File file = new File("output.mp3");
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(audio.array());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static void main(String[] args) {
+        streamAuidoDataToSpeaker();
+        System.exit(0);
+    }
+}
+```
+
+
+
+### 整合SpringBoot
+
+先引入SpringBoot：
+
+```xml
+<parent>        
+    <groupId>org.springframework.boot</groupId>         
+    <artifactId>spring-boot-starter-parent</artifactId>         
+    <version>3.4.3</version>         
+    <relativePath/>       
+</parent>
+```
+
+#### 接入百炼
+
+  官网：  [DashScope (Qwen) | LangChain4j](https://docs.langchain4j.dev/integrations/language-models/dashscope/)
+
+```xml
+<dependencies>
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-community-dashscope-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-community-bom</artifactId>
+            <version>${langchain4j.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+```
+
+Controller：
+
+```java
+package com.xs.langchain4j_demos.controller;
+
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/ai")
+public class AiController {
+
+    @Autowired
+    ChatLanguageModel qwenChatModel;
+
+
+    @RequestMapping("/chat")
+    public String test(@RequestParam(defaultValue="你是谁") String message) {
+        String chat = qwenChatModel.chat(message);
+        return chat;
+    }
+}
+
+```
+
+配置通义千问-Max模型：
+
+```properties
+langchain4j.community.dashscope.chatModel.apiKey=${ALI_AI_KEY} langchain4j.community.dashscope.chatModel.modelName=qwen-plus
+```
+
+访问http://localhost:8080/ai/chat：
+
+![1745638520417](images/1745638520417.png)
+
+
+
+###### 配置deepseek模型
+
+```properties
+langchain4j.community.dashscope.chatModel.apiKey=${DEEPSEEK_API_KEY}
+langchain4j.community.dashscope.chatModel.modelName=deepseek-r1
+```
+
+访问http://localhost:8080/ai/chat：
+
+![1745638674591](images/1745638674591.png)
+
+
+
+#### 接入Ollama
+
+关于Ollama的本地部署：   [DeepSeek本地部署教程](https://www.yuque.com/geren-t8lyq/ncgl94/gq3pk5phzfe77fc2)
+
+官网[Ollama | LangChain4j](https://docs.langchain4j.dev/integrations/language-models/ollama/)
+
+```xml
+<!--Ollama-->         
+<dependency>             
+    <groupId>dev.langchain4j</groupId>         
+    <artifactId>langchain4j-ollama-spring-boot-starter</artifactId>                  		<version>${langchain4j.version}</version>     
+</dependency>"
+
+```
+
+Controller：
+
+```java
+package com.xs.langchain4j_demos.controller;
+
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/ai")
+public class AiController {
+
+  
+    @Autowired
+    ChatLanguageModel ollamaChatModel;
+
+
+    @RequestMapping("/chat_ollama")
+    public String chatOllama(@RequestParam(defaultValue="你是谁") String message) {
+        String chat = ollamaChatModel.chat(message);
+        return chat;
+    }
+}
+
+```
+
+###### 配置deepseek模型
+
+  同上
+
+
+
+#### 流式输出
+
+因为langchain4j不是spring家族， 所以我们在wen应用中需要引入webflux
+
+```xml
+<dependency>       
+    <groupId>org.springframework.boot</groupId>       
+    <artifactId>spring-boot-starter-webflux</artifactId>     
+</dependency>
+```
+
+通过Flux进行流式响应
+
+```java
+
+@RestController
+@RequestMapping("/ai_other")
+public class OtherAIController {
+
+    @Autowired
+    StreamingChatLanguageModel qwenStreamingChatModel;
+
+
+    @RequestMapping(value = "/stream_chat",produces ="text/stream;charset=UTF-8")
+    public Flux<String> test(@RequestParam(defaultValue="你是谁") String message) {
+        return Flux.create(sink -> {
+            qwenStreamingChatModel.chat(message, new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String partialResponse) {
+                    sink.next(partialResponse);  // 逐次返回部分响应
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse completeResponse) {
+                    sink.complete();  // 完成整个响应流
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    sink.error(error);  // 异常处理
+                }
+            });
+        });
+    }
+}
+```
+
+langchain4j毕竟不是spring家族， 和spring生态一起用真蹩脚。  还是springai舒服
 
