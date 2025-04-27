@@ -1,6 +1,6 @@
 # **Java开发者LLM实战—LangChain4j**
 
-### 介绍
+### 一、介绍
 
 LangChain4j官网：https://docs.langchain4j.dev/
 
@@ -20,7 +20,7 @@ LangChain4j 的目标是简化与 Java 应用程序 集成大模型。
 
 
 
-### 初识LangChain4j(纯java)
+#### 初识LangChain4j(纯java)
 
 新建一个Maven工程，然后引入了langchain4j的核心依赖、langchain4j集成OpenAi各个模型的依赖。
 
@@ -59,7 +59,7 @@ LangChain4j 的目标是简化与 Java 应用程序 集成大模型。
 
 
 
-#### 和OpenAi的第一次对话
+##### 和OpenAi的第一次对话
 
 ```java
 package com.xs.langchain4j_demos;
@@ -120,7 +120,7 @@ ChatLanguageModel model = OpenAiChatModel.builder()
 
 
 
-#### 接入deepseek
+##### 接入deepseek
 
 ```JAVA
 
@@ -142,7 +142,7 @@ ChatLanguageModel model = OpenAiChatModel.builder()
     }
 ```
 
-文生图WanxImageModel
+###### 文生图WanxImageModel
 
 ```JAVA
 @Test
@@ -157,7 +157,7 @@ public void test() {
 }	
 ```
 
-文生语音
+###### 文生语音
 
 ```java
 package com.xs.langchain4j_demos;
@@ -201,7 +201,7 @@ public class AudioTest {
 
 
 
-### 整合SpringBoot
+### 二、整合SpringBoot
 
 先引入SpringBoot：
 
@@ -764,7 +764,7 @@ interface Friend {
 
 
 
-### RAG
+### 三、RAG
 
 [ArXiv论文](https://arxiv.org/html/2312.10997v5)
 
@@ -1122,7 +1122,7 @@ chunk_overlap（块间重叠大小）就是下图中加深的部分，上一个�
 
 ##### 3、文本向量化
 
-![1745755628978](images\1745755628978.png)
+![1745755628978](images/1745755628978.png)
 
 代码：依然通过Qwen向量模型进行向量化：  将第2步分割的chunk进行向量化
 
@@ -1203,5 +1203,346 @@ for (EmbeddingMatch<TextSegment> match : results.matches()) {
         }
 
     }
+```
+
+
+
+##### 6、对话阶段
+
+```java
+  ChatLanguageModel model = QwenChatModel
+                .builder()
+                .apiKey(System.getenv("ALI_AI_KEY"))
+                .modelName("qwen-max")
+                .build();
+
+        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)  
+                .embeddingModel(embeddingModel)  
+                .maxResults(5) // 最相似的5个结果
+                .minScore(0.6) // 只找相似度在0.6以上的内容
+                .build();
+
+        // 为Assistant动态代理对象  chat  --->  对话内容存储ChatMemory----> 聊天记录ChatMemory取出来 ---->放入到当前对话中
+        Assistant assistant = AiServices.builder(Assistant.class)  
+                .chatLanguageModel(model)    
+                .contentRetriever(contentRetriever)  
+                .build();
+
+        System.out.println(assistant.chat("退费费用"));
+
+```
+
+
+
+```java
+public interface Assistant {         
+	String chat(String message);   
+}
+```
+
+AiService向量检索原理：
+
+![1745756281062](images/1745756281062.png)
+
+
+
+##### 7、整合SpringBoot
+
+  最终其实还会将查询到的内容，  和对话上下文组合起来，  发给LLM为我们组织语言进行回答。
+
+ 这一步我们直接整合进SpringBoot进行实战：
+
+1. 配置一个Content Retriever  内容检索器
+
+​             a. 提供向量数据库和向量模型及其他参数
+
+2. 将内容检索器绑定到AiServices 。
+
+3. 当我们进行LLM对话时， 底层会自动为我们检索向量数据库进行回答。
+
+```java
+     public interface Assistant {
+            String chat(String message);
+            // 流式响应
+            TokenStream stream(String message);
+        }
+
+    @Bean
+    public Assistant assistant(ChatLanguageModel qwenChatModel,
+                               StreamingChatLanguageModel qwenStreamingChatModel,
+                               ToolsService toolsService,
+                               EmbeddingStore embeddingStore,
+                               QwenEmbeddingModel qwenEmbeddingModel) {
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+
+
+        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(qwenEmbeddingModel)
+                .maxResults(5) // 最相似的5个结果
+                .minScore(0.6) // 只找相似度在0.6以上的内容
+                .build();
+
+        Assistant assistant = AiServices.builder(Assistant.class)
+                .chatLanguageModel(qwenChatModel)
+                .streamingChatLanguageModel(qwenStreamingChatModel)
+                .tools(toolsService)
+                .contentRetriever(contentRetriever)
+                .chatMemory(chatMemory)
+                .build();
+
+        return  assistant;
+    }
+```
+
+我们还需要提前存储向量数据到向量数据库
+
+```java
+@Bean
+    CommandLineRunner ingestTermOfServiceToVectorStore(QwenEmbeddingModel qwenEmbeddingModel,  EmbeddingStore embeddingStore) throws URISyntaxException {
+        // 读取
+        Path documentPath = Paths.get(Langchain4jDemosApplication.class.getClassLoader().getResource("rag/terms-of-service.txt").toURI());
+
+        return args -> {
+            DocumentParser documentParser = new TextDocumentParser();
+            Document document = FileSystemDocumentLoader.loadDocument(documentPath, documentParser);
+
+            DocumentByLineSplitter splitter = new DocumentByLineSplitter(
+                    500,
+                    200
+            );
+            List<TextSegment> segments = splitter.split(document);
+
+            // 向量化
+            List<Embedding> embeddings = qwenEmbeddingModel.embedAll(segments).content();
+
+            // 存入
+            embeddingStore.addAll(embeddings,segments);
+
+        };
+    }
+```
+
+我们依然利用之前的/memory_stream_chat进行测试： 不需要改任何代码
+
+```java
+ @RequestMapping(value = "/memory_stream_chat",produces ="text/stream;charset=UTF-8")
+    public Flux<String> memoryStreamChat(@RequestParam(defaultValue="我是谁") String message, HttpServletResponse response) {
+        TokenStream stream = assistant.stream(message);
+
+        return Flux.create(sink -> {
+            stream.onPartialResponse(s -> sink.next(s))
+                    .onCompleteResponse(c -> sink.complete())
+                    .onError(sink::error)
+                    .start();
+
+        });
+    }
+```
+
+完成
+
+![1745756509814](images/1745756509814.png)
+
+
+
+
+
+### 四、Chain多个ServiceAI
+
+在一个应用中， 可能需要多个模型共同一起协作完成一个任务。
+
+###### **作用**
+
+```
+   你的LLM可能不需要始终了解你拥有的每个tools。例如，当用户只是向LLM打招呼或说再见时，让 LLM 访问数十或数百个tools的成本很高，有时甚至很危险（LLM 调用中包含的每个tools都会消耗大量token），并且可能会导致意想不到的结果（LLM 可能会产生幻觉或被操纵以使用非预期的输入来调用tools）。
+```
+
+ 关于 RAG：同样，有时需要为 LLM 提供一些上下文，但并非总是如此，因为它会产生额外的成本（更多上下文 = 更多token）并增加响应时间（更多上下文 = 更高的延迟）。
+
+ 关于模型参数：在某些情况下，您可能想不通的对话使用不同的 LLM ，以利用不同LLM的最佳特性。
+
+```
+你可以一个接一个地调用 AI 服务（又称链接-chain）。
+ ● 你可以使用确定性和 LLM 支持的if/else语句（AI 服务可以返回boolean）。
+ ● 你可以使用确定性和 LLM 支持的switch语句（AI 服务可以返回enum）。
+ ● 你可以使用确定性和 LLM 驱动的for/while循环（AI 服务可以返回int和其他数字类型）。
+ ● 你可以在单元测试中模拟 AI 服务（因为它是一个接口）。
+```
+
+并且我们可以自由的进行任务编排：
+
+大家平常应该见过一些AI智能体， 由多个（LLM）任务组合编排为一个智能体
+
+![1745756894349](images/1745756894349.png)
+
+
+
+###### 代码
+
+```java
+import dev.langchain4j.community.model.dashscope.QwenChatModel;
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.service.AiServices;
+import dev.langchain4j.service.SystemMessage;
+import dev.langchain4j.service.UserMessage;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * @desc 测试多模型智能体
+ **/
+public class _04TestAgent {
+
+    interface GreetingExpert {
+
+        @UserMessage("以下文本是什么任务： {{it}}")
+        TASKTYPE isTask(String text);
+
+    }
+
+    interface ChatBot {
+
+        @SystemMessage("你是一名航空公司客服代理，请为客户服务：")
+        String reply(String userMessage);
+    }
+
+    class MilesOfSmiles {
+
+        private GreetingExpert greetingExpert;
+        private ChatBot chatBot;
+
+        public MilesOfSmiles(GreetingExpert greetingExpert, ChatBot chatBot) {
+            this.greetingExpert = greetingExpert;
+            this.chatBot = chatBot;
+        }
+
+        public String handle(String userMessage) {
+            TASKTYPE task = greetingExpert.isTask(userMessage);
+
+            switch (task) {
+                case MODIFY_TICKET:
+                case QUERY_TICKET:
+                case CANCEL_TICKET:
+                    return task.getName() + "调用service方法处理";
+                case OTHER:
+                    return chatBot.reply(userMessage);
+            }
+            return null;
+        }
+
+    }
+
+    ChatLanguageModel qwen;
+
+    ChatLanguageModel deepseek;
+
+    @BeforeEach
+    public void init() {
+        qwen = QwenChatModel
+                .builder()
+                .apiKey(System.getenv("ALI_AI_KEY"))
+                .modelName("qwen-max")
+                .build();
+
+        deepseek = OpenAiChatModel
+                .builder()
+                .baseUrl("https://api.deepseek.com")
+                .apiKey(System.getenv("DEEP_SEEK_KEY"))
+                .modelName("deepseek-reasoner")
+                .build();
+    }
+
+
+    @Test
+    void test() {
+        GreetingExpert greetingExpert = AiServices.create(GreetingExpert.class, deepseek);
+
+        ChatBot chatBot = AiServices.create(ChatBot.class, qwen);
+
+        MilesOfSmiles milesOfSmiles = new MilesOfSmiles(greetingExpert, chatBot);
+
+        String greeting = milesOfSmiles.handle("我要退票！");
+        System.out.println(greeting);
+
+
+    }
+}
+
+```
+
+
+
+### 五、MCP
+
+MCP就是tools的一种外部调用的方式（既然要外部调用，肯定就需要遵循一种通信协议， 这里的协议就MCP，利用一种json-rpc2.0的json格式告知用有哪些tools什么参数， 调用哪个tool， 返回什么数据）。之前我们在自己程序中实现了tools，  但是这种tools无法提供给其他应用调用， 形成了应用孤岛， 无法提供外部共享。
+
+![1744781330625](images/1744781330625.gif)
+
+langchain4j 没有提供mcp server的实现， 但是提供的mcp client的实现：
+
+[LangChain4j-MCP](https://docs.langchain4j.dev/tutorials/mcp)
+
+代码
+
+```JAVA
+
+public class _05TestMCP {
+
+    // 测试npx 方式百度地图
+    @Test
+    public void test() throws Exception {
+        // 1.构建模型
+        ChatLanguageModel model = QwenChatModel
+                .builder()
+                .apiKey(System.getenv("ALI_AI_KEY"))
+                .modelName("qwen-max")
+                .build();
+
+        // 2.构建MCP服务传输方式  有sse和stdio两种， 这里演示的是stdio
+        McpTransport transport = new StdioMcpTransport.Builder()
+                .command(List.of("cmd",
+                        "/c",
+                        "npx",
+                        "-y",
+                        "@baidumap/mcp-server-baidu-map",
+                        "mcp/github"))
+                .environment(Map.of("BAIDU_MAP_API_KEY",
+                        System.getenv("BAIDU_MAP_API_KEY")))
+                .logEvents(true)
+                .build();
+
+        // 3.构建MCP客户端， 指定传输方式
+        McpClient mcpClient = new DefaultMcpClient.Builder()
+                .transport(transport)
+                .build();
+
+        // 4.构建MCP工具提供者， 指定MCP客户端
+        ToolProvider toolProvider = McpToolProvider.builder()
+                .mcpClients(List.of(mcpClient))
+                .build();
+
+        // 5.构建服务代理， 指定模型和工具提供者
+        Bot bot = AiServices.builder(Bot.class)
+                .chatLanguageModel(model)
+                .toolProvider(toolProvider)
+                .build();
+
+        try {
+            // 对话请求
+            String response = bot.chat("规划长沙到武汉骑行路线");
+            System.out.println("RESPONSE: " + response);
+        } finally {
+            mcpClient.close();
+        }
+    }
+
+
+    interface Bot {
+        String chat(String userMessage);
+    }
+}
 ```
 
