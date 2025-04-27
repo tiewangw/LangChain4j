@@ -606,3 +606,165 @@ public class PersistentChatMemoryStore implements ChatMemoryStore {
 
 #### Function-call（Tools）
 
+对于基础大模型来说， 他只具备通用信息，他的参数都是拿公网进行训练，并且有一定的时间延迟，  无法得知一些具体业务数据和实时数据， 这些数据往往被各软件系统存储在自己数据库中.
+
+比如我现在开发一个智能票务助手，  我现在跟AI说需要退票， AI怎么做到呢？  就需要让AI调用我们自己系统的退票业务方法，进行操作数据库。
+
+那这些都可以通过function-call进行完成，更多的用于实现类似智能客服场景，因为客服需要帮用户解决业务问题（就需要调用业务方法）。
+
+function-call的流程：
+
+ 比如： 我现在需要当对话中用户问的是“长沙有多少个叫什么名字”的对话， 我需要去我程序中获取"
+
+1. 问大模型 ”长沙有多少个叫徐庶的”
+
+2. 大模型在识别到你的问题是： “长沙有多少个叫什么名字”
+
+3. 大模型提取“徐庶”
+
+4. 调用﻿changshaNameCount﻿方法
+
+5. 通过返回的结果再结合上下文再次请求大模型
+
+6. 响应“长沙有xx个叫徐庶的”
+
+![1745745452100](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745452100.png)
+
+##### 实现
+
+1、加入回调方法：
+
+```java
+
+@Service
+public class ToolsService {
+
+    @Tool("长沙有多少个名字的")
+    public  Integer changshaNameCount(
+            @P("姓名")
+            String name){
+        System.out.println(name);
+        return 10;
+    }
+}
+
+```
+
+ ToolsService配置为了一个bean
+
+ @Tool  用于告诉AI什么对话调用这个方法
+
+ @P("姓名")  用于告诉AI ，调用方法的时候需要提取对话中的什么信息， 这里提取的是姓名
+
+2、结合通过AiService配置tools ， 这里用的是前面记忆对话时配置的Assistant
+
+```java
+ public interface Assistant {
+        String chat(String message);
+        // 流式响应
+        TokenStream stream(String message);
+    }
+
+    @Bean
+    public Assistant assistant(ChatLanguageModel qwenChatModel,
+                               StreamingChatLanguageModel qwenStreamingChatModel,
+                               ToolsService toolsService) {
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+
+
+        Assistant assistant = AiServices.builder(Assistant.class)
+                .chatLanguageModel(qwenChatModel)
+                .streamingChatLanguageModel(qwenStreamingChatModel)
+                .tools(toolsService)
+                .chatMemory(chatMemory)
+                .build();
+
+        return  assistant;
+    }
+```
+
+所以， 你如果需要加更多的tool.  只需要在TollsService中加， 比如：   
+
+```java
+    @Tool("长沙的天气")
+    public  String changshaWeather( ){
+        System.out.println("长沙的天气");
+        return "下雪";
+    }
+```
+
+ 这个langchan4j封装得倒是挺易用的
+
+
+
+#### 预设角色（系统消息SystemMessage）
+
+基础大模型是没有目的性的， 你聊什么给什么， 但是如果我们开发的事一个智能票务助手， 我需要他以一个票务助手的角色跟我对话，  并且在我跟他说"退票"的时候，  让大模型一定要告诉我“车次”和"姓名"  ，这样我才能去调用业务方法（假设有一个业务方法，需要根据车子和姓名才能查询具体车票），进行退票。
+
+![1745745780997](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745780997.png)
+
+在langchain4j中实现也非常简单
+
+ ●  @SystemMessage 系统消息， 一般做一些预设角色的提示词，设置大模型的基本职责
+
+ ● 可以通过{{current_date}} 传入参数，  因为预设词中的文本可能需要实时变化
+
+ ● @V("current_date")， 通过@V传入{{}}中的参数
+
+ ● 一旦参数不止一个， 就需要通过@UserMessage设置用户信息
+
+```java
+public interface Assistant {
+        String chat(String message);
+        // 流式响应
+
+        TokenStream stream(String message);
+        @SystemMessage("""
+                您是“Tuling”航空公司的客户聊天支持代理。请以友好、乐于助人且愉快的方式来回复。
+                        您正在通过在线聊天系统与客户互动。 
+                        在提供有关预订或取消预订的信息之前，您必须始终从用户处获取以下信息：预订号、客户姓名。
+                        请讲中文。
+					   今天的日期是 {{current_date}}.
+                """)
+        TokenStream stream(@UserMessage String message,@V("current_date") String currentDate);
+    }
+
+
+
+  @RequestMapping(value = "/memory_stream_chat",produces ="text/stream;charset=UTF-8")
+    public Flux<String> memoryStreamChat(@RequestParam(defaultValue="我是谁") String message, HttpServletResponse response) {
+        TokenStream stream = assistant.stream(message, LocalDate.now().toString());
+
+        return Flux.create(sink -> {
+            stream.onPartialResponse(s -> sink.next(s))
+                    .onCompleteResponse(c -> sink.complete())
+                    .onError(sink::error)
+                    .start();
+
+        });
+    }
+```
+
+![1745745925717](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745925717.png)
+
+
+
+![1745745951725](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745951725.png)
+
+
+
+另外：假设大模型不支持系统消息（一般都支持），可以用@UserMessage代替@SystemMessage
+
+```java
+interface Friend {
+    @UserMessage("你是一个航空智能助手，你需要帮助用户进行服务： {{it}}")
+    String chat(String userMessage);
+}
+```
+
+
+
+### RAG
+
+检索增强生成（Retrieval-augmented Generation)
+
