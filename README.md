@@ -628,7 +628,7 @@ function-call的流程：
 
 6. 响应“长沙有xx个叫徐庶的”
 
-![1745745452100](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745452100.png)
+![1745745452100](images/1745745452100.png)
 
 ##### 实现
 
@@ -701,7 +701,7 @@ public class ToolsService {
 
 基础大模型是没有目的性的， 你聊什么给什么， 但是如果我们开发的事一个智能票务助手， 我需要他以一个票务助手的角色跟我对话，  并且在我跟他说"退票"的时候，  让大模型一定要告诉我“车次”和"姓名"  ，这样我才能去调用业务方法（假设有一个业务方法，需要根据车子和姓名才能查询具体车票），进行退票。
 
-![1745745780997](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745780997.png)
+![1745745780997](images/1745745780997.png)
 
 在langchain4j中实现也非常简单
 
@@ -745,11 +745,11 @@ public interface Assistant {
     }
 ```
 
-![1745745925717](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745925717.png)
+![1745745925717](images/1745745925717.png)
 
 
 
-![1745745951725](C:\Users\15761\AppData\Roaming\Typora\typora-user-images\1745745951725.png)
+![1745745951725](images/1745745951725.png)
 
 
 
@@ -766,5 +766,205 @@ interface Friend {
 
 ### RAG
 
+[ArXiv论文](https://arxiv.org/html/2312.10997v5)
+
 检索增强生成（Retrieval-augmented Generation)
 
+对于基础大模型来说， 他只具备通用信息，他的参数都是拿公网进行训练，并且有一定的时间延迟，  无法得知一些具体业务数据和实时数据， 这些数据往往在各种文件中（比如txt、word、html、数据库...）
+
+虽然function-call、SystemMessage可以用来解决一部分问题， 但是它只能少量， 如果你要提供大量的业务领域信息，  就需要给他外接一个知识库。
+
+```
+比如
+ 1. 我问他退订要多少费用
+ 2. 这些资料可能都由产品或者需求编写在了文档中  
+ a. 所以需要现在需求信息存到向量数据库（这个过程叫Embedding， 涉及到文档读取、分词、向量化存入）
+ 3. 去向量数据库中查询“退订费用相关信息”
+ 4. 将查询到的数据和对话信息再请求大模型
+ 5. 此时会响应退订需要多少费用
+```
+
+![1745746519094](images/1745746519094.png)
+
+#### 
+
+#### 向量
+
+```
+向量通常用来做相似性搜索，比如语义的一维向量，可以表示词语或短语的语义相似性。例如，“你好”、“hello”和“见到你很高兴”可以通过一维向量来表示它们的语义接近程度。
+```
+
+然而，对于更复杂的对象，比如小狗，无法仅通过一个维度来进行相似性搜索。这时，我们需要提取多个特征，如颜色、大小、品种等，将每个特征表示为向量的一个维度，从而形成一个多维向量。例如，一只棕色的小型泰迪犬可以表示为一个多维向量 [棕色, 小型, 泰迪犬]。
+
+![1745746708181](images/1745746708181.png)
+
+如果需要检索见过更加精准， 我们肯定还需要更多维度的向量， 组成更多维度的空间，在多维向量空间中，相似性检索变得更加复杂。我们需要使用一些算法，如余弦相似度或欧几里得距离，来计算向量之间的相似性。向量数据库会帮我实现。
+
+#### 文本向量化
+
+LangChain4j中来调用向量模型来对一句话进行向量化体验:
+
+```java
+package com.xs;
+
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
+import dev.langchain4j.model.output.Response;
+
+
+public class _05_Vector {
+
+    public static void main(String[] args) {
+
+        QwenEmbeddingModel  embeddingModel= QwenEmbeddingModel.builder()
+                .apiKey(System.getenv("ALI_AI_KEY"))
+                .build();
+
+        Response<Embedding> embed = embeddingModel.embed("你好，我叫徐庶");
+        System.out.println(embed.content().toString());
+		System.out.println(embed.content().vector().length);
+        
+    }
+}
+
+```
+
+代码执行结果为：
+
+```java
+mbedding { vector = [0.014577684, 0.007282357, 0.030037291, -0.02028425, ...
+1536
+```
+
+从结果可以知道"你好，我叫徐庶"这句话经过OpenAiEmbeddingModel向量化之后得到的一个长度为1536的float数组。注意，1536是固定的，不会随着句子长度而变化。
+
+那么，我们通过这种向量模型得到一句话对应的向量有什么作用呢？非常有用，因为我们可以基于向量来判断两句话之间的相似度，举个例子：
+
+ 查询跟秋田犬类似的狗，  在向量数据库中根据每个狗的特点进行多维向量， 你会发现秋田犬的向量数值和柴犬的向量数值最接近， 就可以查到类似的狗。    （当然我这里只是举例，让你对向量数据库有一个印象）
+
+![1745747048170](images/1745747048170.png)
+
+#### 向量数据库
+
+对于向量模型生成出来的向量，我们可以持久化到向量数据库，并且能利用向量数据库来计算两个向量之间的相似度，或者根据一个向量查找跟这个向量最相似的向量。
+
+ 在LangChain4j中，EmbeddingStore表示向量数据库，它有支持[20+ 嵌入模型](https://docs.langchain4j.dev/integrations/embedding-stores/)
+
+![1745747217165](images/1745747217165.png)
+
+其中有我们熟悉的几个数据库都可以用来存储向量，比如Elasticsearch、MongoDb、Neo4j、Pg、Redis。"
+
+Redis也很简单， 你需要先安装redis7.0+的版本：
+
+```xml
+<dependency> 	
+    <groupId>dev.langchain4j</groupId> 
+    <artifactId>langchain4j-redis</artifactId> 
+    <version>${langchain4j.version}</version>
+</dependency>
+```
+
+然后需要注意的是，普通的Redis是不支持向量存储和查询的，需要额外的redisearch模块，我这边是直接使用docker来运行一个带有redisearch模块的redis容器的，命令为：
+
+```shell
+docker run -p 6379:6379 redis/redis-stack-server:latest
+```
+
+注意端口6379不要和你现有的Redis冲突了。然后就可以使用以下代码把向量存到redis中了。
+
+```java
+RedisEmbeddingStore embeddingStore = RedisEmbeddingStore.builder()
+    .host("127.0.0.1")
+    .port(6379)
+    .dimension(1536)
+    .build();
+
+// 生成向量
+Response<Embedding> embed = embeddingModel.embed("我是徐庶");
+
+// 存储向量
+embeddingStore.add(embed.content());
+```
+
+dimension表示要存储的向量的维度，所以为1536，如果你不是使用OpenAiEmbeddingModel得到的向量，那么维度可能会不一样。
+
+
+
+#### 匹配向量
+
+在这个示例中， 我分别存储了﻿预订航班﻿和﻿取消预订﻿2段说明到向量数据库中，然后通过"退票要多少钱" 进行查询。
+
+![1745747693811](images/1745747693811.png)
+
+
+
+```java
+    @Test
+    public void test02()  {
+        InMemoryEmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
+
+        QwenEmbeddingModel  embeddingModel= QwenEmbeddingModel.builder()
+                .apiKey(System.getenv("ALI_AI_KEY"))
+                .build();
+
+        // 利用向量模型进行向量化， 然后存储向量到向量数据库
+        TextSegment segment1 = TextSegment.from("""
+                预订航班:
+                - 通过我们的网站或移动应用程序预订。
+                - 预订时需要全额付款。
+                - 确保个人信息（姓名、ID 等）的准确性，因为更正可能会产生 25 的费用。
+                """);
+        Embedding embedding1 = embeddingModel.embed(segment1).content();
+        embeddingStore.add(embedding1, segment1);
+
+        // 利用向量模型进行向量化， 然后存储向量到向量数据库
+        TextSegment segment2 = TextSegment.from("""
+                取消预订:
+                - 最晚在航班起飞前 48 小时取消。
+                - 取消费用：经济舱 75 美元，豪华经济舱 50 美元，商务舱 25 美元。
+                - 退款将在 7 个工作日内处理。
+                """);
+        Embedding embedding2 = embeddingModel.embed(segment2).content();
+        embeddingStore.add(embedding2, segment2);
+
+
+        // 需要查询的内容 向量化
+        Embedding queryEmbedding = embeddingModel.embed("退票要多少钱").content();
+
+        // 去向量数据库查询
+        // 构建查询条件
+        EmbeddingSearchRequest build = EmbeddingSearchRequest.builder()
+                .queryEmbedding(queryEmbedding)
+                .maxResults(1)
+                .build();
+
+        // 查询
+        EmbeddingSearchResult<TextSegment> segmentEmbeddingSearchResult = embeddingStore.search(build);
+        segmentEmbeddingSearchResult.matches().forEach(embeddingMatch -> {
+            System.out.println(embeddingMatch.score()); // 0.8144288515898701
+            System.out.println(embeddingMatch.embedded().text()); // I like football.
+        });
+
+    }
+
+```
+
+代码执行结果为
+
+```java
+0.7319455553039915
+取消预订:
+- 最晚在航班起飞前 48 小时取消。
+- 取消费用：经济舱 75 美元，豪华经济舱 50 美元，商务舱 25 美元。
+- 退款将在 7 个工作日内处理。
+```
+
+由于我设置的是返回结果数量为1， 所以他会返回匹配度分数最高的那段内容.   如果返回结果数量为2. 其实预订航班那段也会查出来， 但是他的匹配度分数更低也没有太大的意义。
+
+
+
+#### 知识库RAG
