@@ -401,3 +401,208 @@ public class OtherAIController {
 
 langchain4j毕竟不是spring家族， 和spring生态一起用真蹩脚。  还是springai舒服
 
+
+
+#### 记忆对话(多轮对话）
+
+##### 原生方式
+
+每次对话都需要将之前的对话记录，都发给大模型， 这样才能知道我们之前说了什么
+
+```java
+     /**
+     * 测试多轮对话——正确用法
+     */
+    @Test
+    void test03_good() {
+        ChatLanguageModel model = OpenAiChatModel
+                .builder()
+                .apiKey("demo")
+                .modelName("gpt-4o-mini")
+                .build();
+
+
+        UserMessage userMessage1 = UserMessage.userMessage("你好，我是徐庶");
+        ChatResponse response1 = model.chat(userMessage1);
+        AiMessage aiMessage1 = response1.aiMessage(); // 大模型的第一次响应
+        System.out.println(aiMessage1.text());
+        System.out.println("----");
+
+        // 下面一行代码是重点
+        ChatResponse response2 = model.chat(userMessage1, aiMessage1, UserMessage.userMessage("我叫什么"));
+        AiMessage aiMessage2 = response2.aiMessage(); // 大模型的第二次响应
+        System.out.println(aiMessage2.text());
+
+    }
+```
+
+![1745743773348](images/1745743773348.png)
+
+但是如果要我们每次把之前的记录自己去维护， 未免太麻烦， 所以提供了ChatMemory
+
+但是他这个ChatMemory没有SpringAi好用、易用， 十分麻烦！
+
+##### 通过ChatMemory
+
+```java
+
+@Configuration
+public class AiConfig {
+
+    public interface Assistant {
+        String chat(String message);
+        // 流式响应
+        TokenStream stream(String message);
+    }
+
+    @Bean
+    public Assistant assistant(ChatLanguageModel qwenChatModel,
+                               StreamingChatLanguageModel qwenStreamingChatModel) {
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+
+
+        Assistant assistant = AiServices.builder(Assistant.class)
+                .chatLanguageModel(qwenChatModel)
+                .streamingChatLanguageModel(qwenStreamingChatModel)
+                .chatMemory(chatMemory)
+                .build();
+
+        return  assistant;
+    }
+}
+```
+
+原理：
+
+通过AiService创建的代理对象调用chat方法
+
+1、代理对象会去ChatMemory中获取之前的对话记录（获取记忆）
+
+2、将获取到的对话记录合并到当前对话中（此时大模型根据之前的聊天记录肯定就拥有了“记忆”）
+
+3、将当前的对话内容存入ChatMemory（保存记忆）
+
+Controller:
+
+```java
+@RestController
+@RequestMapping("/ai_other")
+public class OtherAIController { 
+    @Autowired
+    AiConfig.Assistant assistant;
+    
+    @RequestMapping(value = "/memory_chat")
+    public String memoryChat(@RequestParam(defaultValue="我叫徐庶") String message) {
+        return assistant.chat(message);
+    }
+
+}
+
+
+     @RequestMapping(value = "/memory_stream_chat",produces ="text/stream;charset=UTF-8")
+    public Flux<String> memoryStreamChat(@RequestParam(defaultValue="我是谁") String message, HttpServletResponse response) {
+        TokenStream stream = assistant.stream(message);
+
+        return Flux.create(sink -> {
+            stream.onPartialResponse(s -> sink.next(s))
+                    .onCompleteResponse(c -> sink.complete())
+                    .onError(sink::error)
+                    .start();
+
+        });
+    }
+```
+
+我们通过2种接口体验记忆对话
+
+![1745744226248](images/1745744226248.png)
+
+
+
+![1745744246610](images/1745744246610.png)
+
+
+
+##### 记忆分离
+
+现在我们再来想另一种情况：  如果不同的用户或者不同的对话肯定不能用同一个记忆，要不然对话肯定会混淆，此时就需要进行区分：
+
+可以通过**memoryId**进行区分，**memoryId**可以设置为用户Id, 或者对话Id  进行区分即可：
+
+```java
+
+    @Autowired
+    AiConfig.AssistantUnique assistantUnique;
+
+    @RequestMapping(value = "/memoryId_chat")
+    public String memoryChat(@RequestParam(defaultValue="我是谁") String message, Integer userId) {
+        return assistantUnique.chat(userId,message);
+    }
+
+```
+
+##### 持久化对话
+
+如果要对记忆的数据进行持久化呢？ 因为现在的数据其实是存在内存中， 重启就丢了。
+
+可以配置一个﻿**ChatMemoryStore**﻿ ， 默认是﻿InMemoryChatMemoryStore﻿——通过一个map进行存储。
+
+![1745744586070](images/1745744586070.png)
+
+所以如果需要持久化到第三方存储， 可以重新配置﻿ChatMemoryStore﻿ 。
+
+1、自定义ChatMemoryStore实现类：
+
+```java
+public class PersistentChatMemoryStore implements ChatMemoryStore {
+
+        private final Map<Integer, List<ChatMessage>> map =new HashMap<>();
+
+        @Override
+        public List<ChatMessage> getMessages(Object memoryId) {
+            // todo 根据memoryId从数据库获取
+        }
+
+        @Override
+        public void updateMessages(Object memoryId, List<ChatMessage> messages) {
+            // todo 根据memoryId修改、新增记录
+        }
+
+        @Override
+        public void deleteMessages(Object memoryId) {
+           // todo 根据memoryId删除
+        }
+    }
+```
+
+2、配置ChatMemoryStore
+
+```java
+    @Bean
+    public AssistantUnique assistantUniqueStore(ChatLanguageModel qwenChatModel,
+                                           StreamingChatLanguageModel qwenStreamingChatModel) {
+
+        PersistentChatMemoryStore store = new PersistentChatMemoryStore();
+
+        ChatMemoryProvider chatMemoryProvider = memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId)
+                .maxMessages(10)
+                .chatMemoryStore(store)
+                .build();
+
+        AssistantUnique assistant = AiServices.builder(AssistantUnique.class)
+                .chatLanguageModel(qwenChatModel)
+                .streamingChatLanguageModel(qwenStreamingChatModel)
+                .chatMemoryProvider(memoryId ->
+                        MessageWindowChatMemory.builder().maxMessages(10)
+                                .id(memoryId).build()
+                )
+                .chatMemoryProvider(chatMemoryProvider)
+                .build();
+        return assistant;
+```
+
+
+
+#### Function-call（Tools）
+
